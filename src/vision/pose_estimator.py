@@ -187,7 +187,7 @@ class PoseEstimator:
                 tvec=tvec,
                 confidence=confidence,
                 reprojection_error=reprojection_error,
-                distance=distance,
+                distance=distance,  # type: ignore
             )
 
         except cv2.error:
@@ -360,7 +360,7 @@ class PoseEstimator:
             tvec=tvec,
             confidence=confidence,
             reprojection_error=reprojection_error,
-            distance=distance,
+            distance=distance,  # type: ignore
         )
 
 

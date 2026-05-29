@@ -1,0 +1,29 @@
+[project]
+name = "autonomous-drone-racing"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "gymnasium>=1.1.1",
+    "mpmath>=1.3.0",
+    "networkx>=3.1",
+    "numpy>=1.24.4",
+    "opencv-python>=4.13.0.92",
+    "pillow>=10.4.0",
+    "pybullet>=3.2.7",
+    "pyyaml>=6.0.3",
+    "sympy>=1.13.3",
+    "torch==2.0.1+cu117",
+    "torchvision==0.15.2+cu117",
+    "tqdm>=4.66.5",
+    "ultralytics>=8.4.56",
+]
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple/"
+default = true
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu117"

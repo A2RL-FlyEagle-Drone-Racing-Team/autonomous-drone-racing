@@ -16,6 +16,7 @@ from pathlib import Path
 import time
 
 import torch
+import torch.backends.mps
 
 # Import our modules
 from ..vision.gate_net import GateNet, create_gatenet

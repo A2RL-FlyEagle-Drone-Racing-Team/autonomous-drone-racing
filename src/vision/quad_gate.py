@@ -93,7 +93,7 @@ class QuAdGate:
             if area < self.min_contour_area:
                 continue
 
-            detection = self._process_contour(contour, mask.shape)
+            detection = self._process_contour(contour, mask.shape) # type: ignore
             if detection is not None:
                 detections.append(detection)
 
@@ -101,8 +101,8 @@ class QuAdGate:
             return None
 
         # Return best detection (highest confidence)
-        if return_all:
-            return detections
+        # if return_all:
+        #     return detections
 
         return max(detections, key=lambda d: d.confidence)
 
@@ -321,7 +321,7 @@ class QuAdGate:
             cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6)
             angle_dev += abs(cos_angle)  # Should be 0 for 90 degrees
 
-        return length_diff + angle_dev
+        return length_diff + angle_dev # type: ignore
 
     def _compute_confidence(
         self,
