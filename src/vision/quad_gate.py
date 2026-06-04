@@ -351,8 +351,8 @@ class QuAdGate:
 
         # Area score (penalize very small or very large)
         # Expected area range based on gate at various distances
-        min_expected_area = 50
-        max_expected_area = 3000  # Most of frame
+        min_expected_area = 500
+        max_expected_area = 80000  # Most of frame
         if area < min_expected_area:
             area_confidence = area / min_expected_area
         elif area > max_expected_area:

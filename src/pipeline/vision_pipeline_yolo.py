@@ -8,6 +8,7 @@ This pipeline handles the asynchronous nature of vision updates (24 Hz)
 with high-frequency state estimation (500 Hz) using the Extended Kalman Filter.
 """
 
+import os
 import numpy as np
 from typing import Dict, Optional, Tuple, Any
 from dataclasses import dataclass
@@ -19,32 +20,56 @@ import torch.backends.mps
 from ultralytics import YOLO
 
 # Import our modules
-from ..vision.quad_gate import QuAdGate, GateTracker, GateDetection
-from ..vision.pose_estimator import PoseEstimator, GatePose
-from ..state.ekf import ExtendedKalmanFilter, EKFState
+from src.vision.quad_gate import QuAdGate, GateTracker, GateDetection
+from src.vision.pose_estimator import PoseEstimator, GatePose
+from src.state.ekf import ExtendedKalmanFilter, EKFState
 
 
 @dataclass
-class PipelineConfig:
+class YOLOPipelineConfig:
     """Configuration for the vision racing pipeline."""
 
     # Frequencies
-    vision_freq: int = 24  # Hz
+    vision_freq: int = 60  # Hz
 
     # Gate parameters
-    gate_width: float = 1.0
-    gate_height: float = 1.0
+    gate_width: float = 2.7
+    gate_height: float = 2.7
 
     # Camera parameters
     image_width: int = 640  # YOLO default input size
     image_height: int = 480
-    camera_fov: float = 60.0
+    camera_fov: Optional[float] = 60.0
+    camera_matrix: Optional[np.ndarray] = None
+    dist_coeffs: Optional[np.ndarray] = None
 
-    # Model paths
-    yolo_model_path: Optional[str] = None
+    # Model filename (will be searched in models/ directory)
+    yolo_model_name: Optional[str] = "best-seg.engine"
 
     # Device
     device: str = "auto"
+
+    @classmethod
+    def from_kalibr(cls, kalibr_config: Dict[str, Any]) -> "YOLOPipelineConfig":
+        """Create config from Kalibr config.
+        
+        Kalibr stores intrinsics as [fx, fy, cx, cy], this converts to 3x3 camera matrix.
+        """
+        config = cls()
+        config.camera_fov = None
+        config.image_width, config.image_height = kalibr_config["cam0"]["resolution"]
+        
+        # Convert Kalibr intrinsics [fx, fy, cx, cy] to 3x3 camera matrix
+        intrinsics = kalibr_config["cam0"]["intrinsics"]
+        fx, fy, cx, cy = intrinsics
+        config.camera_matrix = np.array([
+            [fx, 0, cx],
+            [0, fy, cy],
+            [0, 0, 1],
+        ], dtype=np.float64)
+        
+        config.dist_coeffs = np.array(kalibr_config["cam0"]["distortion_coeffs"])
+        return config
 
 
 class VisionRacingYOLOPipeline:
@@ -65,7 +90,7 @@ class VisionRacingYOLOPipeline:
 
     def __init__(
         self,
-        config: Optional[PipelineConfig] = None,
+        config: Optional[YOLOPipelineConfig] = None,
         known_gates: Optional[Dict[int, Tuple[np.ndarray, np.ndarray]]] = None,
     ):
         """
@@ -75,7 +100,7 @@ class VisionRacingYOLOPipeline:
             config: Pipeline configuration
             known_gates: Dict of gate_id -> (position, orientation) for EKF updates
         """
-        self.config = config or PipelineConfig()
+        self.config = config or YOLOPipelineConfig()
 
         # Initialize device
         if self.config.device == "auto":
@@ -106,17 +131,60 @@ class VisionRacingYOLOPipeline:
         self.latest_pose: Optional[GatePose] = None
         self.latest_image: Optional[np.ndarray] = None
 
+    def _find_model_file(self, model_name: str) -> Optional[str]:
+        """Search for model file in common locations.
+        
+        Searches for the model file in the following order:
+        1. ./models/ (relative to current working directory)
+        2. ../models/ (parent directory)
+        3. models/ directory relative to this file's location
+        4. models/ directory relative to autonomous-drone-racing package
+        """
+        # Common model directory names
+        model_dirs = ['models', 'model']
+        
+        # Search paths relative to current working directory
+        cwd = os.getcwd()
+        for dir_name in model_dirs:
+            for depth in [0, 1, 2]:
+                path = os.path.join(cwd, '../' * depth, dir_name, model_name)
+                abs_path = os.path.abspath(path)
+                if os.path.exists(abs_path):
+                    return abs_path
+        
+        # Search relative to this file's location
+        this_file_dir = os.path.dirname(os.path.abspath(__file__))
+        for dir_name in model_dirs:
+            # Search in autonomous-drone-racing/models/
+            path = os.path.join(this_file_dir, '..', '..', dir_name, model_name)
+            abs_path = os.path.abspath(path)
+            if os.path.exists(abs_path):
+                return abs_path
+            # Search in auto_racing/models/
+            path = os.path.join(this_file_dir, '..', '..', '..', dir_name, model_name)
+            abs_path = os.path.abspath(path)
+            if os.path.exists(abs_path):
+                return abs_path
+        
+        return None
+
     def _init_vision(self):
         """Initialize vision components."""
         # YOLO for segmentation
-        if self.config.yolo_model_path:
-            self.yolo = YOLO(self.config.yolo_model_path)
+        model_path = None
+        if self.config.yolo_model_name:
+            model_path = self._find_model_file(self.config.yolo_model_name)
+        
+        if model_path:
+            self.yolo = YOLO(model_path)
+            print(f"Loaded YOLO model from: {model_path}")
         else:
             # Load default YOLOv8 segmentation model
+            print(f"Model '{self.config.yolo_model_name}' not found, using default YOLOv8n-seg")
             self.yolo = YOLO("yolov8n-seg.pt")
 
         # Move to device
-        self.yolo.to(self.device)
+        # self.yolo.to(self.device)
 
         # QuAdGate for corner detection
         self.quad_gate = QuAdGate()
@@ -128,6 +196,8 @@ class VisionRacingYOLOPipeline:
             gate_height=self.config.gate_height,
             image_size=(self.config.image_width, self.config.image_height),
             camera_fov=self.config.camera_fov,
+            camera_matrix=self.config.camera_matrix,
+            dist_coeffs=self.config.dist_coeffs,
         )
 
     def _init_state_estimation(
@@ -233,7 +303,7 @@ class VisionRacingYOLOPipeline:
             rgb_image = rgb_image[..., :3]
 
         # Run YOLO inference
-        results = self.yolo(rgb_image, verbose=False)
+        results = self.yolo.predict(rgb_image, verbose=False, device=self.device)
 
         # Get the first result
         result = results[0]
@@ -382,7 +452,7 @@ class VisionRacingYOLOPipeline:
             yolo_model_path: Path to YOLO checkpoint
         """
         self.yolo = YOLO(yolo_model_path)
-        self.yolo.to(self.device)
+        # self.yolo.to(self.device)
 
 
 if __name__ == "__main__":
@@ -396,7 +466,7 @@ if __name__ == "__main__":
         2: (np.array([4, 4, 1]), np.array([0.71, 0, 0, 0.71])),
     }
 
-    config = PipelineConfig(
+    config = YOLOPipelineConfig(
         vision_freq=24,
         device="cpu",
     )
