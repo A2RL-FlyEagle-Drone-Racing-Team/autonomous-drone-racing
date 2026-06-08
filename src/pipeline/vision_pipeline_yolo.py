@@ -9,6 +9,7 @@ with high-frequency state estimation (500 Hz) using the Extended Kalman Filter.
 """
 
 import os
+import cv2
 import numpy as np
 from typing import Dict, Optional, Tuple, Any
 from dataclasses import dataclass
@@ -20,9 +21,9 @@ import torch.backends.mps
 from ultralytics import YOLO
 
 # Import our modules
-from src.vision.quad_gate import QuAdGate, GateTracker, GateDetection
-from src.vision.pose_estimator import PoseEstimator, GatePose
-from src.state.ekf import ExtendedKalmanFilter, EKFState
+from ..vision.quad_gate import QuAdGate, GateTracker, GateDetection
+from ..vision.pose_estimator import PoseEstimator, GatePose
+from ..state.ekf import ExtendedKalmanFilter, EKFState
 
 
 @dataclass
@@ -45,6 +46,7 @@ class YOLOPipelineConfig:
 
     # Model filename (will be searched in models/ directory)
     yolo_model_name: Optional[str] = "best-seg.engine"
+    convert_to_rgb: bool = False
 
     # Device
     device: str = "auto"
@@ -284,6 +286,7 @@ class VisionRacingYOLOPipeline:
         self,
         rgb_image: np.ndarray,
         current_time: float,
+        save_mask_path: Optional[str] = None,
     ) -> Optional[GatePose]:
         """
         Process camera image through vision pipeline.
@@ -291,19 +294,32 @@ class VisionRacingYOLOPipeline:
         Args:
             rgb_image: RGB image (H, W, 3) or (H, W, 4)
             current_time: Current simulation time
+            save_mask_path: Optional path to save mask visualization
 
         Returns:
             Gate pose if detected, None otherwise
         """
+        if self.config.convert_to_rgb:
+            rgb_image = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2RGB)
+
         self.latest_image = rgb_image
         self.last_vision_time = current_time
 
         # Preprocess image
-        if rgb_image.shape[-1] == 4:
-            rgb_image = rgb_image[..., :3]
+        # if rgb_image.shape[-1] == 4:
+        #     rgb_image = rgb_image[..., :3]
 
         # Run YOLO inference
-        results = self.yolo.predict(rgb_image, verbose=False, device=self.device)
+        # results = self.yolo.predict(rgb_image, verbose=False, device=self.device)
+        results = self.yolo(
+            source=rgb_image,
+            conf=0.5,
+            iou=0.7,
+            max_det=10,
+            half = True,
+            rect = False,
+            verbose=False,
+        )
 
         # Get the first result
         result = results[0]
@@ -314,6 +330,15 @@ class VisionRacingYOLOPipeline:
         # Detect corners
         detection = self.gate_tracker.update(mask_np)
         self.latest_detection = detection
+
+        # Save mask visualization if path is provided
+        if save_mask_path:
+            if not self.config.convert_to_rgb:
+                rgb_image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
+
+            from ..vision.quad_gate import visualize_image_with_detection
+            mask_vis = visualize_image_with_detection(rgb_image, mask_np, detection)
+            cv2.imwrite(save_mask_path, mask_vis)
 
         if detection is None or detection.confidence < 0.3:
             return None
@@ -372,6 +397,7 @@ class VisionRacingYOLOPipeline:
         accel: Optional[np.ndarray] = None,
         gyro: Optional[np.ndarray] = None,
         dt: float = 0.002,  # Default 500 Hz
+        save_mask_path: Optional[str] = None,
     ) -> Tuple[EKFState, Dict[str, Any]]:
         """
         Run one step of the pipeline.
@@ -384,6 +410,7 @@ class VisionRacingYOLOPipeline:
             dt: Time step for EKF prediction
               > 原版代码根据当前时刻与上一次控制时刻的时间差获取dt，<br/>
               > 此处直接按500Hz设置dt
+            save_mask_path: Optional path to save mask visualization
 
         Returns:
             Tuple of (state, info_dict)
@@ -393,7 +420,7 @@ class VisionRacingYOLOPipeline:
         # Process vision if new image available
         gate_pose = None
         if rgb_image is not None:
-            gate_pose = self.process_image(rgb_image, current_time)
+            gate_pose = self.process_image(rgb_image, current_time, save_mask_path)
             if gate_pose is not None:
                 self.update_state_with_vision(gate_pose, self.current_gate_idx)
 

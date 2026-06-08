@@ -573,6 +573,173 @@ def visualize_detection(
     return vis
 
 
+def visualize_mask_with_detection(
+    mask: np.ndarray,
+    detection: Optional[GateDetection],
+) -> np.ndarray:
+    """
+    Visualize gate detection on binary mask image.
+
+    Draws:
+    - Contour in blue
+    - Detected corners in different colors
+    - Quadrilateral fitting in green
+    - Center point in magenta
+
+    Args:
+        mask: Binary segmentation mask (H, W), values in [0, 1] or [0, 255]
+        detection: Gate detection result
+
+    Returns:
+        Annotated RGB image with mask and detection visualization
+    """
+    # Convert mask to RGB for visualization
+    if mask.dtype == np.float32 or mask.dtype == np.float64:
+        mask_uint8 = (mask * 255).astype(np.uint8)
+    else:
+        mask_uint8 = mask.copy()
+    
+    # Create RGB image from mask
+    vis = cv2.cvtColor(mask_uint8, cv2.COLOR_GRAY2BGR)
+
+    if detection is None:
+        return vis
+
+    # Draw contour if available
+    if detection.contour is not None:
+        cv2.drawContours(vis, [detection.contour], -1, (255, 0, 0), 2)
+
+    # Draw corners with colors
+    colors = [
+        (255, 0, 0),    # TL: Red
+        (0, 255, 0),    # TR: Green
+        (0, 0, 255),    # BR: Blue
+        (255, 255, 0),  # BL: Yellow
+    ]
+    corner_names = ['TL', 'TR', 'BR', 'BL']
+
+    corners = detection.corners.astype(np.int32)
+
+    for i, (corner, color, name) in enumerate(zip(corners, colors, corner_names)):
+        # Draw corner dot
+        cv2.circle(vis, tuple(corner), 4, color, -1)
+        # Draw corner label
+        cv2.putText(vis, name, tuple(corner + np.array([6, -2])),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+
+    # Draw quadrilateral (fitted gate)
+    cv2.polylines(vis, [corners], True, (0, 255, 255), 2)
+
+    # Draw center
+    if detection.center is not None:
+        center = detection.center.astype(np.int32)
+        cv2.circle(vis, tuple(center), 3, (255, 0, 255), -1)
+        cv2.putText(vis, 'Center', tuple(center + np.array([5, 15])),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 0, 255), 1)
+
+    # Add confidence and info text
+    info_text = f"Conf: {detection.confidence:.2f} | Corners: {detection.visible_corners}/4"
+    cv2.putText(
+        vis,
+        info_text,
+        (5, 15),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.4,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA
+    )
+
+    return vis
+
+
+def visualize_image_with_detection(
+    raw_image: np.ndarray,
+    mask: np.ndarray,
+    detection: Optional[GateDetection],
+) -> np.ndarray:
+    """
+    Visualize gate detection on image.
+
+    Draws:
+    - Contour in blue
+    - Detected corners in different colors
+    - Quadrilateral fitting in green
+    - Center point in magenta
+
+    Args:
+        raw_image: RGB image (H, W, 3), values in [0, 1] or [0, 255]
+        mask: Binary segmentation mask (H, W), values in [0, 1] or [0, 255]
+        detection: Gate detection result
+
+    Returns:
+        Annotated RGB image with detection visualization
+    """
+    vis = cv2.cvtColor(raw_image, cv2.COLOR_RGB2BGR)
+
+    # Draw semi-transparent mask first (underneath other annotations)
+    if mask is not None:
+        # Normalize mask to [0, 1]
+        mask_normalized = mask.astype(np.float32) / 255.0 if mask.max() > 1 else mask.astype(np.float32)
+        
+        # Resize mask to match image dimensions if needed (YOLO may output different size)
+        if mask_normalized.shape[:2] != vis.shape[:2]:
+            vis = cv2.resize(vis, (mask_normalized.shape[1], mask_normalized.shape[0]))
+        
+        # Create colored mask overlay (green color)
+        alpha = 0.3
+        overlay_inds = mask_normalized > 0.5
+        roi_vis = vis[overlay_inds]
+        blended = ( (1-alpha) * roi_vis + alpha * np.array([0,255,0], dtype=np.uint8) ).astype(np.uint8)
+        if blended is not None:
+            vis[overlay_inds] = blended
+
+    if detection is None:
+        return vis
+
+    # Draw contour if available
+    if detection.contour is not None:
+        cv2.drawContours(vis, [detection.contour], -1, (255, 191, 0), 2) # deepskyblue
+
+    # Draw corners with colors
+    color = (0, 165, 255) # orange
+    corner_names = ['TL', 'TR', 'BR', 'BL']
+
+    corners = detection.corners.astype(np.int32)
+
+    for i, (corner, name) in enumerate(zip(corners, corner_names)):
+        # Draw corner dot
+        cv2.circle(vis, tuple(corner), 4, color, -1)
+        # Draw corner label
+        cv2.putText(vis, name, tuple(corner + np.array([6, -2])),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+
+    # Draw quadrilateral (fitted gate)
+    cv2.polylines(vis, [corners], True, (0, 255, 255), 2)
+
+    # Draw center
+    if detection.center is not None:
+        center = detection.center.astype(np.int32)
+        cv2.circle(vis, tuple(center), 3, (255, 0, 255), -1)
+        cv2.putText(vis, 'Center', tuple(center + np.array([5, 15])),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 0, 255), 1)
+
+    # Add confidence and info text
+    info_text = f"Conf: {detection.confidence:.2f} | Corners: {detection.visible_corners}/4"
+    cv2.putText(
+        vis,
+        info_text,
+        (5, 15),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.4,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA
+    )
+
+    return vis
+
+
 if __name__ == "__main__":
     # Test QuAdGate detection
     print("Testing QuAdGate corner detection...")
