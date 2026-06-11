@@ -121,6 +121,7 @@ class ExtendedKalmanFilter:
 
     def __init__(
         self,
+        extrinsic_matrix: Optional[np.ndarray] = None,
         # Process noise parameters
         process_noise_pos: float = 0.01,
         process_noise_vel: float = 0.1,
@@ -150,6 +151,11 @@ class ExtendedKalmanFilter:
             gravity: Gravitational acceleration [m/s^2]
         """
         self.gravity = np.array([0, 0, -gravity])
+        self.R_cam_to_body = np.array([
+            [0, 0, 1],
+            [-1, 0, 0],
+            [0, -1, 0],
+        ]) if extrinsic_matrix is None else np.linalg.inv(extrinsic_matrix)
 
         # Store noise parameters
         self.process_noise = {
@@ -327,20 +333,15 @@ class ExtendedKalmanFilter:
         # If we see gate at position p_c in camera frame,
         # then drone position = gate_world_pos - R_world_cam @ p_c
 
-        R = self.state.rotation_matrix
+        R_cam_to_world = self.state.rotation_matrix @ self.R_cam_to_body
 
         # Camera frame to world frame (camera is forward-looking)
         # Camera: z forward, x right, y down
         # World: x forward, y left, z up
-        R_cam_to_body = np.array([
-            [0, 0, 1],
-            [-1, 0, 0],
-            [0, -1, 0],
-        ])
 
         # Gate position in world frame (from observation)
-        gate_pos_body = R_cam_to_body @ gate_position_camera
-        gate_pos_world = R @ gate_pos_body + self.state.position
+        # gate_pos_body = self.R_cam_to_body @ gate_position_camera
+        gate_pos_world = R_cam_to_world @ gate_position_camera + self.state.position
 
         # Measurement: expected vs observed gate position
         z = gate_pos_world  # Observed gate position in world

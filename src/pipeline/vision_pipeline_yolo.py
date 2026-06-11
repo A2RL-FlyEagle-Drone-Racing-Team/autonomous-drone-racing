@@ -41,7 +41,8 @@ class YOLOPipelineConfig:
     image_width: int = 640  # YOLO default input size
     image_height: int = 480
     camera_fov: Optional[float] = 60.0
-    camera_matrix: Optional[np.ndarray] = None
+    intrinsic_matrix: Optional[np.ndarray] = None
+    extrinsic_matrix: Optional[np.ndarray] = None
     dist_coeffs: Optional[np.ndarray] = None
 
     # Model filename (will be searched in models/ directory)
@@ -64,11 +65,12 @@ class YOLOPipelineConfig:
         # Convert Kalibr intrinsics [fx, fy, cx, cy] to 3x3 camera matrix
         intrinsics = kalibr_config["cam0"]["intrinsics"]
         fx, fy, cx, cy = intrinsics
-        config.camera_matrix = np.array([
+        config.intrinsic_matrix = np.array([
             [fx, 0, cx],
             [0, fy, cy],
             [0, 0, 1],
         ], dtype=np.float64)
+        config.extrinsic_matrix = np.array(kalibr_config["cam0"]["T_cam_imu"], dtype=np.float64)[:3, :3]
         
         config.dist_coeffs = np.array(kalibr_config["cam0"]["distortion_coeffs"])
         return config
@@ -198,7 +200,7 @@ class VisionRacingYOLOPipeline:
             gate_height=self.config.gate_height,
             image_size=(self.config.image_width, self.config.image_height),
             camera_fov=self.config.camera_fov,
-            camera_matrix=self.config.camera_matrix,
+            camera_matrix=self.config.intrinsic_matrix,
             dist_coeffs=self.config.dist_coeffs,
         )
 
@@ -207,7 +209,7 @@ class VisionRacingYOLOPipeline:
         known_gates: Optional[Dict[int, Tuple[np.ndarray, np.ndarray]]] = None,
     ):
         """Initialize state estimation (EKF)."""
-        self.ekf = ExtendedKalmanFilter()
+        self.ekf = ExtendedKalmanFilter(extrinsic_matrix=self.config.extrinsic_matrix)
 
         if known_gates:
             self.ekf.set_known_gates(known_gates)

@@ -74,12 +74,18 @@ class PoseEstimator:
         # 3D points of gate corners in gate frame
         # Order: TL, TR, BR, BL (matching QuAdGate output)
         # Gate center at origin, facing +Z direction
+        # self.gate_points_3d = np.array([
+        #     [-gate_width/2, -gate_height/2, 0],  # Top-left
+        #     [gate_width/2, -gate_height/2, 0],   # Top-right
+        #     [gate_width/2, gate_height/2, 0],    # Bottom-right
+        #     [-gate_width/2, gate_height/2, 0],   # Bottom-left
+        # ], dtype=np.float64)
         self.gate_points_3d = np.array([
-            [-gate_width/2, -gate_height/2, 0],  # Top-left
-            [gate_width/2, -gate_height/2, 0],   # Top-right
-            [gate_width/2, gate_height/2, 0],    # Bottom-right
-            [-gate_width/2, gate_height/2, 0],   # Bottom-left
-        ], dtype=np.float64)
+            [0, gate_width/2, gate_height/2],
+            [0, -gate_width/2, gate_height/2],
+            [0, -gate_width/2, -gate_height/2],
+            [0, gate_width/2, -gate_height/2],
+        ], dtype=np.float64)    
 
     def _compute_camera_matrix(self) -> np.ndarray:
         """Compute camera intrinsic matrix from FOV and image size."""
