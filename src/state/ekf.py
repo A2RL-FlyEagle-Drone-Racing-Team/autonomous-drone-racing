@@ -155,7 +155,7 @@ class ExtendedKalmanFilter:
             [0, 0, 1],
             [-1, 0, 0],
             [0, -1, 0],
-        ]) if extrinsic_matrix is None else np.linalg.inv(extrinsic_matrix)
+        ]) if extrinsic_matrix is None else np.linalg.inv(extrinsic_matrix[:3, :3])
 
         # Store noise parameters
         self.process_noise = {
