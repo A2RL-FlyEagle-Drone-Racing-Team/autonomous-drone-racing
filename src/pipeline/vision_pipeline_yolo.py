@@ -72,7 +72,7 @@ class YOLOPipelineConfig:
         ], dtype=np.float64)
         config.extrinsic_matrix = np.array(kalibr_config["cam0"]["T_cam_imu"], dtype=np.float64)[:3, :3]
         
-        config.dist_coeffs = np.array(kalibr_config["cam0"]["distortion_coeffs"])
+        config.dist_coeffs = np.array(kalibr_config["cam0"]["distortion_coeffs"] + [0.])
         return config
 
 

@@ -85,7 +85,7 @@ class PoseEstimator:
             [0, -gate_width/2, gate_height/2],
             [0, -gate_width/2, -gate_height/2],
             [0, gate_width/2, -gate_height/2],
-        ], dtype=np.float64)    
+        ], dtype=np.float64)
 
     def _compute_camera_matrix(self) -> np.ndarray:
         """Compute camera intrinsic matrix from FOV and image size."""
@@ -134,7 +134,7 @@ class PoseEstimator:
         try:
             if use_ransac:
                 # RANSAC-based PnP (more robust to outliers)
-                success, rvec, tvec, inliers = cv2.solvePnPRansac(
+                success, rvec, tvec, _ = cv2.solvePnPRansac(
                     self.gate_points_3d,
                     image_points,
                     self.camera_matrix,

@@ -7,9 +7,10 @@ despite low-frequency vision updates (24 Hz).
 """
 
 import numpy as np
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict
 from dataclasses import dataclass, field
 from enum import Enum
+from loguru import logger
 
 
 class MeasurementType(Enum):
@@ -327,7 +328,12 @@ class ExtendedKalmanFilter:
         if gate_idx not in self.known_gates:
             return self.state
 
+        # logger.debug(f"Drone position: {self.state.position}")
+        # logger.debug(f"Drone orientation: {self.state.orientation}")
+        # logger.debug(f"gate_position_camera: {gate_position_camera}")
+
         known_pos, known_ori = self.known_gates[gate_idx]
+        # logger.debug(f"known_pos: {known_pos}")
 
         # Transform gate observation to world frame estimate of drone position
         # If we see gate at position p_c in camera frame,
@@ -342,6 +348,7 @@ class ExtendedKalmanFilter:
         # Gate position in world frame (from observation)
         # gate_pos_body = self.R_cam_to_body @ gate_position_camera
         gate_pos_world = R_cam_to_world @ gate_position_camera + self.state.position
+        # logger.debug(f"gate_pos_world: {gate_pos_world}")
 
         # Measurement: expected vs observed gate position
         z = gate_pos_world  # Observed gate position in world
