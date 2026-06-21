@@ -9,7 +9,12 @@ from src.vision.quad_gate import GateDetection
 # ==================== 已知参数 ====================
 intrinsics = [233.4812810871969, 233.31138002134063, 228.4277126603732, 126.90905719756599]
 intrinsic_matrix = np.array(
-    [[intrinsics[0], 0.0, intrinsics[2]], [0.0, intrinsics[1], intrinsics[3]], [0.0, 0.0, 1.0]], dtype=np.float64
+    [
+        [intrinsics[0], 0.0, intrinsics[2]],
+        [0.0, intrinsics[1], intrinsics[3]],
+        [0.0, 0.0, 1.0],
+    ],
+    dtype=np.float64,
 )
 image_size = (512, 288)
 h, w = image_size
@@ -25,10 +30,10 @@ extrinsic_matrix = np.array(
 dist_coeffs = np.array([-0.27558041690741447, 0.08515382530472485, 0.0007373633751444942, 1.5895925597849783e-05])
 points_3d = np.array(
     [
-        [0, 1.35, 1.35],
         [0, -1.35, 1.35],
-        [0, -1.35, -1.35],
+        [0, 1.35, 1.35],
         [0, 1.35, -1.35],
+        [0, -1.35, -1.35],
     ],
     dtype=np.float64,
 )
@@ -41,16 +46,37 @@ points_2d = np.array(
     ],
     dtype=np.float64,
 )
-body_pos_xyz_seu = np.array([2.787519131592388, 1.1825721482828748, 0.7859731579390311])
-body_quat_xyzw_seu = np.array([0.020856436472970197, -0.08203751426503408, -0.687687877894269, 0.7210549479118359])
-gate_pos_xyz_seu = np.array([-1.3686406697380282, 1.4187037807060632, 1.3489209174600654])
-gate_quat_xyzw_seu = np.array([0.001287775970562029, 0.00275718150613899, -0.7267172459621076, 0.6869299702330955])
 
-body_euler_seu = Rotation.from_quat(body_quat_xyzw_seu).as_euler("zyx", True)
-gate_euler_seu = Rotation.from_quat(gate_quat_xyzw_seu).as_euler("zyx", True)
-logger.debug(f"[已知条件] 机体位置: {body_pos_xyz_seu}")
+rotmat_VB2B = np.array(
+    [
+        [0, -1, 0],
+        [1, 0, 0],
+        [0, 0, 1],
+    ],
+    dtype=np.float64,
+)
+transvec_VB2B = np.array([0, 0, 0], dtype=np.float64)
+rotmat_B2C = extrinsic_matrix[:3, :3]
+transvec_B2C = extrinsic_matrix[:3, 3].flatten()
+rotmat_VG2G = np.array(
+    [
+        [0, -1, 0],
+        [1, 0, 0],
+        [0, 0, 1],
+    ],
+    dtype=np.float64,
+)
+
+body_pos_xyz_VB = np.array([2.787519131592388, 1.1825721482828748, 0.7859731579390311])
+body_quat_xyzw_VB = np.array([0.020856436472970197, -0.08203751426503408, -0.687687877894269, 0.7210549479118359])
+gate_pos_xyz_VB = np.array([-1.3686406697380282, 1.4187037807060632, 1.3489209174600654])
+gate_quat_xyzw_VB = np.array([0.001287775970562029, 0.00275718150613899, -0.7267172459621076, 0.6869299702330955])
+
+body_euler_seu = Rotation.from_quat(body_quat_xyzw_VB).as_euler("XYZ", True)
+gate_euler_seu = Rotation.from_quat(gate_quat_xyzw_VB).as_euler("XYZ", True)
+logger.debug(f"[已知条件] 机体位置: {body_pos_xyz_VB}")
 logger.debug(f"[已知条件] 机体欧拉角: {body_euler_seu}")
-logger.debug(f"[已知条件] 门框位置: {gate_pos_xyz_seu}")
+logger.debug(f"[已知条件] 门框位置: {gate_pos_xyz_VB}")
 logger.debug(f"[已知条件] 门框欧拉角: {gate_euler_seu}")
 
 # region PoseEstimator
@@ -77,11 +103,11 @@ logger.info(f"[PnP] 门框相对于相机的欧拉角：{Rotation.from_rotvec(ga
 ekf = ExtendedKalmanFilter(
     extrinsic_matrix=extrinsic_matrix,
 )
-ekf.set_known_gates({0: (gate_pos_xyz_seu, gate_quat_xyzw_seu)})
+ekf.set_known_gates({0: (gate_pos_xyz_VB, gate_quat_xyzw_VB)})
 ekf.reset(
-    position=body_pos_xyz_seu,
+    position=body_pos_xyz_VB,
     velocity=np.zeros(3),
-    orientation=body_quat_xyzw_seu,
+    orientation=body_quat_xyzw_VB,
 )
 gate_position_camera = gate_pose.position
 gate_idx = 0
@@ -91,5 +117,11 @@ gate_pos_world = R_cam_to_world @ gate_position_camera + ekf.state.position
 logger.info(f"[EKF] 门框在世界坐标系的位置：{gate_pos_world}")
 # endregion EKF
 
-logger.info(f"门框在世界坐标系的位置误差：{gate_pos_world - gate_pos_xyz_seu}")
-logger.info(f"门框在世界坐标系的位置误差范数：{np.linalg.norm(gate_pos_world - gate_pos_xyz_seu)}")
+logger.info(f"门框在世界坐标系的位置误差：{gate_pos_world - gate_pos_xyz_VB}")
+logger.info(f"门框在世界坐标系的位置误差范数：{np.linalg.norm(gate_pos_world - gate_pos_xyz_VB)}")
+
+"""
+可能的问题
+1. 数据未对齐
+2. 按xyzw顺序读取四元数，不要转成wxyz
+"""

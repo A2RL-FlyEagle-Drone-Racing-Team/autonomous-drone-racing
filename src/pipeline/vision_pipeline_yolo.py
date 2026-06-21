@@ -10,6 +10,7 @@ with high-frequency state estimation (500 Hz) using the Extended Kalman Filter.
 
 import os
 import cv2
+from loguru import logger
 import numpy as np
 from typing import Dict, Optional, Tuple, Any
 from dataclasses import dataclass
@@ -18,7 +19,9 @@ import torch
 import torch.backends.mps
 
 # Import YOLO from ultralytics
+from ultralytics.engine.results import Results
 from ultralytics import YOLO
+from scipy.spatial.transform import Rotation
 
 # Import our modules
 from ..vision.quad_gate import QuAdGate, GateTracker, GateDetection
@@ -55,23 +58,26 @@ class YOLOPipelineConfig:
     @classmethod
     def from_kalibr(cls, kalibr_config: Dict[str, Any]) -> "YOLOPipelineConfig":
         """Create config from Kalibr config.
-        
+
         Kalibr stores intrinsics as [fx, fy, cx, cy], this converts to 3x3 camera matrix.
         """
         config = cls()
         config.camera_fov = None
         config.image_width, config.image_height = kalibr_config["cam0"]["resolution"]
-        
+
         # Convert Kalibr intrinsics [fx, fy, cx, cy] to 3x3 camera matrix
         intrinsics = kalibr_config["cam0"]["intrinsics"]
         fx, fy, cx, cy = intrinsics
-        config.intrinsic_matrix = np.array([
-            [fx, 0, cx],
-            [0, fy, cy],
-            [0, 0, 1],
-        ], dtype=np.float64)
+        config.intrinsic_matrix = np.array(
+            [
+                [fx, 0, cx],
+                [0, fy, cy],
+                [0, 0, 1],
+            ],
+            dtype=np.float64,
+        )
         config.extrinsic_matrix = np.array(kalibr_config["cam0"]["T_cam_imu"], dtype=np.float64)[:3, :3]
-        
+
         config.dist_coeffs = np.array(kalibr_config["cam0"]["distortion_coeffs"])
         return config
 
@@ -95,6 +101,7 @@ class VisionRacingYOLOPipeline:
     def __init__(
         self,
         config: Optional[YOLOPipelineConfig] = None,
+        pose_estimator: Optional[PoseEstimator] = None,
         known_gates: Optional[Dict[int, Tuple[np.ndarray, np.ndarray]]] = None,
     ):
         """
@@ -118,7 +125,7 @@ class VisionRacingYOLOPipeline:
             self.device = torch.device(self.config.device)
 
         # Initialize components
-        self._init_vision()
+        self._init_vision(pose_estimator)
         self._init_state_estimation(known_gates)
 
         # Timing
@@ -135,9 +142,11 @@ class VisionRacingYOLOPipeline:
         self.latest_pose: Optional[GatePose] = None
         self.latest_image: Optional[np.ndarray] = None
 
+        self.output_image: np.ndarray
+
     def _find_model_file(self, model_name: str) -> Optional[str]:
         """Search for model file in common locations.
-        
+
         Searches for the model file in the following order:
         1. ./models/ (relative to current working directory)
         2. ../models/ (parent directory)
@@ -145,40 +154,40 @@ class VisionRacingYOLOPipeline:
         4. models/ directory relative to autonomous-drone-racing package
         """
         # Common model directory names
-        model_dirs = ['models', 'model']
-        
+        model_dirs = ["models", "model"]
+
         # Search paths relative to current working directory
         cwd = os.getcwd()
         for dir_name in model_dirs:
             for depth in [0, 1, 2]:
-                path = os.path.join(cwd, '../' * depth, dir_name, model_name)
+                path = os.path.join(cwd, "../" * depth, dir_name, model_name)
                 abs_path = os.path.abspath(path)
                 if os.path.exists(abs_path):
                     return abs_path
-        
+
         # Search relative to this file's location
         this_file_dir = os.path.dirname(os.path.abspath(__file__))
         for dir_name in model_dirs:
             # Search in autonomous-drone-racing/models/
-            path = os.path.join(this_file_dir, '..', '..', dir_name, model_name)
+            path = os.path.join(this_file_dir, "..", "..", dir_name, model_name)
             abs_path = os.path.abspath(path)
             if os.path.exists(abs_path):
                 return abs_path
             # Search in auto_racing/models/
-            path = os.path.join(this_file_dir, '..', '..', '..', dir_name, model_name)
+            path = os.path.join(this_file_dir, "..", "..", "..", dir_name, model_name)
             abs_path = os.path.abspath(path)
             if os.path.exists(abs_path):
                 return abs_path
-        
+
         return None
 
-    def _init_vision(self):
+    def _init_vision(self, pose_estimator: Optional[PoseEstimator] = None):
         """Initialize vision components."""
         # YOLO for segmentation
         model_path = None
         if self.config.yolo_model_name:
             model_path = self._find_model_file(self.config.yolo_model_name)
-        
+
         if model_path:
             self.yolo = YOLO(model_path)
             print(f"Loaded YOLO model from: {model_path}")
@@ -318,19 +327,20 @@ class VisionRacingYOLOPipeline:
             conf=0.5,
             iou=0.7,
             max_det=10,
-            half = True,
-            rect = False,
+            half=True,
+            rect=False,
             verbose=False,
         )
 
         # Get the first result
-        result = results[0]
+        result: Results = results[0] # 输出掩码为 640*640
 
         # Convert YOLO output to single channel mask
         mask_np = self._yolo_mask_to_single_channel(result)
+        mask_np_resized = cv2.resize(mask_np, (self.config.image_width, self.config.image_height))
 
         # Detect corners
-        detection = self.gate_tracker.update(mask_np)
+        detection = self.gate_tracker.update(mask_np_resized)
         self.latest_detection = detection
 
         # Save mask visualization if path is provided
@@ -339,15 +349,20 @@ class VisionRacingYOLOPipeline:
                 rgb_image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
 
             from ..vision.quad_gate import visualize_image_with_detection
-            mask_vis = visualize_image_with_detection(rgb_image, mask_np, detection)
+            mask_vis = visualize_image_with_detection(rgb_image, mask_np_resized, detection)
             cv2.imwrite(save_mask_path, mask_vis)
 
         if detection is None or detection.confidence < 0.3:
             return None
+        print(f"角点：{detection.corners}")
 
         # Estimate pose
         pose = self.pose_estimator.estimate_pose(detection)
         self.latest_pose = pose
+        # if save_mask_path and pose is not None:
+        #     position = pose.position
+        #     orientation_euler = Rotation.from_quat(pose.orientation).as_euler('xyz', degrees=True)
+        #     logger.debug(f"[门框在相机系位姿估计]\nposition: {position}, orientation: {orientation_euler}")
 
         return pose
 

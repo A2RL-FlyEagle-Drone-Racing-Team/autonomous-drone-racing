@@ -41,7 +41,8 @@ class PoseEstimator:
         camera_matrix: Optional[np.ndarray] = None,
         dist_coeffs: Optional[np.ndarray] = None,
         image_size: Tuple[int, int] = (64, 48),
-        camera_fov: float = 60.0,
+        camera_fov: Optional[float] = 60.0,
+        gate_points_3d: Optional[np.ndarray] = None,
     ):
         """
         Initialize pose estimator.
@@ -85,11 +86,12 @@ class PoseEstimator:
             [0, -gate_width/2, gate_height/2],
             [0, -gate_width/2, -gate_height/2],
             [0, gate_width/2, -gate_height/2],
-        ], dtype=np.float64)    
+        ], dtype=np.float64) if gate_points_3d is None else gate_points_3d
 
     def _compute_camera_matrix(self) -> np.ndarray:
         """Compute camera intrinsic matrix from FOV and image size."""
         width, height = self.image_size
+        assert self.camera_fov is not None, "FOV or camera matrix must be provided"
         fov_rad = np.radians(self.camera_fov)
 
         # Focal length in pixels
@@ -131,7 +133,7 @@ class PoseEstimator:
         if len(image_points) != 4:
             return None
 
-        try:
+        try:    # 相机在门框局部坐标系下的位姿
             if use_ransac:
                 # RANSAC-based PnP (more robust to outliers)
                 success, rvec, tvec, inliers = cv2.solvePnPRansac(
