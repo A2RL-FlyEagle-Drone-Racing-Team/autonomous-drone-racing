@@ -136,7 +136,7 @@ class PoseEstimator:
         try:    # 相机在门框局部坐标系下的位姿
             if use_ransac:
                 # RANSAC-based PnP (more robust to outliers)
-                success, rvec, tvec, inliers = cv2.solvePnPRansac(
+                success, rvec, tvec, _ = cv2.solvePnPRansac(
                     self.gate_points_3d,
                     image_points,
                     self.camera_matrix,
