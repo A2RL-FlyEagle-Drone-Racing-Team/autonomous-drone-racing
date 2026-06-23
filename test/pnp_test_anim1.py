@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import cv2
+import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
@@ -258,6 +260,14 @@ def main(dataset_dir: Path, run_pipeline: bool = True):
 
     n_frames = len(img_paths)
     cam_positions_output = []
+    gate_roll = []
+    gate_pitch = []
+    gate_yaw = []
+    gate_roll_est = []
+    gate_pitch_est = []
+    gate_yaw_est = []
+    gate_pos = []
+    gate_pos_est = []
     print(
         f"门框在地面系真实位姿\nposition: {gate_pos_xyz}\n"
         f"orientation: {Rotation.from_quat(gate_quat_xyzw).as_euler('xyz', degrees=True)}"
@@ -280,6 +290,11 @@ def main(dataset_dir: Path, run_pipeline: bool = True):
             R_cam_to_drone,
             T_cam_to_drone,
         )
+        gate_roll.append(gate_euler_cam[0])
+        gate_pitch.append(gate_euler_cam[1])
+        gate_yaw.append(gate_euler_cam[2])
+        gate_pos.append(gate_pos_cam)
+
         print(f"门框在相机系位姿\nposition: {gate_pos_cam}\norientation: {gate_euler_cam}")
 
         if run_pipeline and pipeline is not None:
@@ -290,17 +305,76 @@ def main(dataset_dir: Path, run_pipeline: bool = True):
             )
             if gate_pose is not None:
                 pos_est_err = np.linalg.norm(gate_pose.position - gate_pos_cam)
+                gate_pose_orientation = Rotation.from_quat(gate_pose.orientation).as_euler("zyx", degrees=True)
+                gate_roll_est.append(gate_pose_orientation[0])
+                gate_pitch_est.append(gate_pose_orientation[1])
+                gate_yaw_est.append(gate_pose_orientation[2])
+                gate_pos_est.append(gate_pose.position)
                 print(
                     f"门框在相机系位姿估计\nposition: {gate_pose.position}\n"
-                    f"orientation: {Rotation.from_quat(gate_pose.orientation).as_euler('zyx', degrees=True)}\n"
+                    f"orientation: {gate_pose_orientation}\n"
                     f"重投影误差: {gate_pose.reprojection_error}\n"
                     f"位姿估计误差: {pos_est_err} ({pos_est_err / np.linalg.norm(gate_pos_cam) * 100:.2f} %)"
-                ) # TODO: 欧拉角顺序？（rvec -> euler）
+                )  # TODO: 欧拉角顺序？（rvec -> euler）
             if gate_pose is not None:
                 pipeline.update_state_with_vision(gate_pose, 0)
             # state = pipeline.get_state()
             # state = pipeline.predict_state(dt, drone_accel[i], drone_angvel[i])
             # cam_positions_output.append(state)
+
+    fig, axes = plt.subplots(2, 3)
+    ax = axes.flatten()
+    ax[0].plot(gate_roll)
+    ax[0].plot(gate_roll_est)
+    ax[0].set_title("Roll")
+    ax[0].set_xlabel("Frame ID")
+    ax[0].set_ylabel("Roll Angle (deg)")
+    ax[0].legend(["True", "Est"])
+    ax[0].grid()
+
+    ax[1].plot(gate_pitch)
+    ax[1].plot(gate_pitch_est)
+    ax[1].set_title("Pitch")
+    ax[1].set_xlabel("Frame ID")
+    ax[1].set_ylabel("Pitch Angle (deg)")
+    ax[1].legend(["True", "Est"])
+    ax[1].grid()
+
+    ax[2].plot(gate_yaw)
+    ax[2].plot(gate_yaw_est)
+    ax[2].set_title("Yaw")
+    ax[2].set_xlabel("Frame ID")
+    ax[2].set_ylabel("Yaw Angle (deg)")
+    ax[2].legend(["True", "Est"])
+    ax[2].grid()
+
+    gate_pos = np.asarray(gate_pos)
+    gate_pos_est = np.asarray(gate_pos_est)
+    ax[3].plot(gate_pos[:, 0])
+    ax[3].plot(gate_pos_est[:, 0])
+    ax[3].set_title("Position (x)")
+    ax[3].set_xlabel("Frame ID")
+    ax[3].set_ylabel("Position (m)")
+    ax[3].legend(["True", "Est"])
+    ax[3].grid()
+
+    ax[4].plot(gate_pos[:, 1])
+    ax[4].plot(gate_pos_est[:, 1])
+    ax[4].set_title("Position (y)")
+    ax[4].set_xlabel("Frame ID")
+    ax[4].set_ylabel("Position (m)")
+    ax[4].legend(["True", "Est"])
+    ax[4].grid()
+
+    ax[5].plot(gate_pos[:, 2])
+    ax[5].plot(gate_pos_est[:, 2])
+    ax[5].set_title("Position (z)")
+    ax[5].set_xlabel("Frame ID")
+    ax[5].set_ylabel("Position (m)")
+    ax[5].legend(["True", "Est"])
+    ax[5].grid()
+
+    plt.show()
 
 
 # endregion
