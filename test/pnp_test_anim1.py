@@ -227,6 +227,7 @@ def main(dataset_dir: Path, run_pipeline: bool = True):
             camera_fov=None,
             gate_points_3d=meta.gate.gate_points_3d,
         )
+        print(pose_estimator.gate_points_3d)
         pipeline_config = YOLOPipelineConfig(
             vision_freq=meta.fps,
             gate_width=meta.gate.dimensions[1] / 2,
@@ -322,7 +323,7 @@ def main(dataset_dir: Path, run_pipeline: bool = True):
             # state = pipeline.predict_state(dt, drone_accel[i], drone_angvel[i])
             # cam_positions_output.append(state)
 
-    fig, axes = plt.subplots(2, 3)
+    fig, axes = plt.subplots(2, 3, figsize=(12, 6))
     ax = axes.flatten()
     ax[0].plot(gate_roll)
     ax[0].plot(gate_roll_est)
@@ -374,6 +375,7 @@ def main(dataset_dir: Path, run_pipeline: bool = True):
     ax[5].legend(["True", "Est"])
     ax[5].grid()
 
+    plt.tight_layout()
     plt.show()
 
 
