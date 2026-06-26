@@ -305,17 +305,19 @@ def main(dataset_dir: Path, run_pipeline: bool = True):
                 save_mask_path=str(output_img_dir / f"{frame_id}.png"),
             )
             if gate_pose is not None:
-                pos_est_err = np.linalg.norm(gate_pose.position - gate_pos_cam)
+                pos_est_err = gate_pose.position - gate_pos_cam
+                pos_est_relerr = pos_est_err / gate_pos_cam * 100
                 gate_pose_orientation = Rotation.from_quat(gate_pose.orientation).as_euler("zyx", degrees=True)
                 gate_roll_est.append(gate_pose_orientation[0])
                 gate_pitch_est.append(gate_pose_orientation[1])
                 gate_yaw_est.append(gate_pose_orientation[2])
                 gate_pos_est.append(gate_pose.position)
                 print(
-                    f"门框在相机系位姿估计\nposition: {gate_pose.position}\n"
+                    f"门框在相机系位姿估计\nposition: {np.asarray(gate_pose.position)}\n"
                     f"orientation: {gate_pose_orientation}\n"
                     f"重投影误差: {gate_pose.reprojection_error}\n"
-                    f"位姿估计误差: {pos_est_err} ({pos_est_err / np.linalg.norm(gate_pos_cam) * 100:.2f} %)"
+                    f"位置估计误差: {pos_est_err} "
+                    f"({pos_est_relerr[0]:.2f}%, {pos_est_relerr[1]:.2f}%, {pos_est_relerr[2]:.2f}%)"
                 )  # TODO: 欧拉角顺序？（rvec -> euler）
             if gate_pose is not None:
                 pipeline.update_state_with_vision(gate_pose, 0)
@@ -376,6 +378,7 @@ def main(dataset_dir: Path, run_pipeline: bool = True):
     ax[5].grid()
 
     plt.tight_layout()
+    plt.savefig(str(output_img_dir / "pnp_test_anim1.png"))
     plt.show()
 
 
