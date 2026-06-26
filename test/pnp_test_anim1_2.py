@@ -185,6 +185,10 @@ class PoseEstimator:
             ],
             dtype=np.float64,
         )
+        
+        # 保存上一帧的 rvec 和 tvec（初始为 None）
+        self.prev_rvec: Optional[np.ndarray] = None
+        self.prev_tvec: Optional[np.ndarray] = None
 
     def estimate_pose(self, detection: GateDetection) -> Optional[GatePose]:
         if detection is None or detection.corners is None:
@@ -193,19 +197,46 @@ class PoseEstimator:
         if len(image_points) != 4:
             return None
         try:
-            # success, rvec, tvec = cv2.solvePnP(
-            #     self.gate_points_3d, image_points, self.camera_matrix, self.dist_coeffs, flags=cv2.SOLVEPNP_ITERATIVE
-            # )
+            # 初始化 rvec, tvec
+            if self.prev_rvec is not None and self.prev_tvec is not None:
+                # 使用上一帧结果作为初始值
+                rvec_init = self.prev_rvec.copy()
+                tvec_init = self.prev_tvec.copy()
+            else:
+                # 第一帧：先用 IPPE 快速求解作为初始值
+                success, rvec_init, tvec_init = cv2.solvePnP(
+                    self.gate_points_3d,
+                    image_points,
+                    self.camera_matrix,
+                    self.dist_coeffs,
+                    flags=cv2.SOLVEPNP_IPPE
+                )
+                if not success:
+                    rvec_init = np.zeros((3, 1), dtype=np.float64)
+                    tvec_init = np.zeros((3, 1), dtype=np.float64)
 
+            # 使用迭代法（可指定初始值）
             success, rvec, tvec = cv2.solvePnP(
                 self.gate_points_3d,
                 image_points,
                 self.camera_matrix,
                 self.dist_coeffs,
-                flags=cv2.SOLVEPNP_IPPE,  # 或 SOLVEPNP_IPPE_SQUARE
+                rvec=rvec_init,
+                tvec=tvec_init,
+                useExtrinsicGuess=True,    # 启用初始值
+                flags=cv2.SOLVEPNP_ITERATIVE
             )
             if not success:
-                return None
+                # 若失败，回退到 IPPE（无初始值）
+                success, rvec, tvec = cv2.solvePnP(
+                    self.gate_points_3d,
+                    image_points,
+                    self.camera_matrix,
+                    self.dist_coeffs,
+                    flags=cv2.SOLVEPNP_IPPE
+                )
+                if not success:
+                    return None
 
             R_ippe, _ = cv2.Rodrigues(rvec)
             R_adj = np.array(
@@ -224,12 +255,12 @@ class PoseEstimator:
             R, _ = cv2.Rodrigues(rvec)
             q = self._rot_to_quat(R)
 
-            # rvec = rvec.flatten()
-            # tvec = tvec.flatten()
-            # R, _ = cv2.Rodrigues(rvec)
-            # q = self._rot_to_quat(R)
+            # 更新上一帧结果
+            self.prev_rvec = rvec.copy()
+            self.prev_tvec = tvec.copy()
 
-            # reprojection error
+
+            # 重投影误差
             proj, _ = cv2.projectPoints(self.gate_points_3d, rvec, tvec, self.camera_matrix, self.dist_coeffs)
             proj = proj.reshape(-1, 2)
             reproj_err = np.mean(np.linalg.norm(proj - image_points, axis=1))
