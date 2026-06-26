@@ -1,3 +1,4 @@
+import itertools
 import os
 import json
 import cv2
@@ -176,14 +177,11 @@ class PoseEstimator:
             dtype=np.float64,
         )
 
-        self.R_adj = np.array(
-            [
-                [0, -1, 0],
-                [0, 0, -1],
-                [1, 0, 0],
-            ],
-            dtype=np.float64,
-        )  # 将新法线 x 转到旧法线 z
+        self.R_adj = np.array([
+            [0, -1,  0],
+            [0,  0, -1],
+            [1,  0,  0]
+        ], dtype=np.float64)
         # 保存上一帧的 rvec 和 tvec（初始为 None）
         self.prev_rvec: Optional[np.ndarray] = None
         self.prev_tvec: Optional[np.ndarray] = None
@@ -194,62 +192,80 @@ class PoseEstimator:
         image_points = detection.corners.astype(np.float64)
         if len(image_points) != 4:
             return None
-        try:
-            # 初始化 rvec, tvec
-            if self.prev_rvec is not None and self.prev_tvec is not None:
-                # 使用上一帧结果作为初始值
-                rvec_init = self.prev_rvec.copy()
-                tvec_init = self.prev_tvec.copy()
-            else:
-                # 第一帧：先用 IPPE 快速求解作为初始值
-                success, rvec_init, tvec_init = cv2.solvePnP(
-                    self.gate_points_3d, image_points, self.camera_matrix, self.dist_coeffs, flags=cv2.SOLVEPNP_IPPE
-                )
-                if not success:
-                    rvec_init = np.zeros((3, 1), dtype=np.float64)
-                    tvec_init = np.zeros((3, 1), dtype=np.float64)
-
-            # 使用迭代法（可指定初始值）
-            success, rvec, tvec = cv2.solvePnP(
-                self.gate_points_3d,
-                image_points,
-                self.camera_matrix,
-                self.dist_coeffs,
-                rvec=rvec_init,
-                tvec=tvec_init,
-                useExtrinsicGuess=True,  # 启用初始值
-                flags=cv2.SOLVEPNP_ITERATIVE,
-            )
-            if not success:
-                # 若失败，回退到 IPPE（无初始值）
-                success, rvec, tvec = cv2.solvePnP(
-                    self.gate_points_3d, image_points, self.camera_matrix, self.dist_coeffs, flags=cv2.SOLVEPNP_IPPE
-                )
-                if not success:
-                    return None
-
-            R_ippe, _ = cv2.Rodrigues(rvec)
-            R_true = R_ippe @ self.R_adj
-            rvec_true, _ = cv2.Rodrigues(R_true)
-            # 替换 rvec 和 tvec，继续后续计算
-            rvec = rvec_true.flatten()
-            tvec = tvec.flatten()
-            R, _ = cv2.Rodrigues(rvec)
-            q = self._rot_to_quat(R)
-
-            # 更新上一帧结果
-            self.prev_rvec = rvec.copy()
-            self.prev_tvec = tvec.copy()
-
-            # 重投影误差
-            proj, _ = cv2.projectPoints(self.gate_points_3d, rvec, tvec, self.camera_matrix, self.dist_coeffs)
-            proj = proj.reshape(-1, 2)
-            reproj_err = np.mean(np.linalg.norm(proj - image_points, axis=1))
-            dist = np.linalg.norm(tvec)
-            conf = detection.confidence * max(0, 1 - reproj_err / 10)
-            return GatePose(tvec, q, R, rvec, tvec, conf, reproj_err, float(dist))
-        except cv2.error:
+        
+        # 使用 IPPE 或迭代法求解（这里建议 IPPE，因为快速且无需初始值）
+        success, rvec, tvec = cv2.solvePnP(
+            self.gate_points_3d,
+            image_points,
+            self.camera_matrix,
+            self.dist_coeffs,
+            flags=cv2.SOLVEPNP_IPPE   # 或 IPPE_SQUARE
+        )
+        if not success:
             return None
+
+        R_ippe, _ = cv2.Rodrigues(rvec)
+        tvec = tvec.flatten()
+
+        # 生成所有轴置换矩阵（24种，每行每列一个 ±1）
+        permutations = []
+        for perm in itertools.permutations([0, 1, 2]):
+            for signs in itertools.product([1, -1], repeat=3):
+                P = np.zeros((3, 3))
+                for i, (col, s) in enumerate(zip(perm, signs)):
+                    P[i, col] = s
+                permutations.append(P)
+
+        best_err = float('inf')
+        best_R = None
+        best_tvec = tvec
+
+        # 对每个轴置换，生成 4 个 Z 旋转候选
+        for P in permutations:
+            R_corr = R_ippe @ P   # 校正后的旋转
+            # 生成 4 个 Z 旋转候选
+            for angle_deg in [0, 90, 180, 270]:
+                angle_rad = np.deg2rad(angle_deg)
+                Rz = cv2.Rodrigues(np.array([0, 0, angle_rad]))[0]
+                R_candidate = R_corr @ Rz
+                rvec_candidate, _ = cv2.Rodrigues(R_candidate)
+                proj, _ = cv2.projectPoints(
+                    self.gate_points_3d,
+                    rvec_candidate,
+                    tvec,
+                    self.camera_matrix,
+                    self.dist_coeffs
+                )
+                proj = proj.reshape(-1, 2)
+                err = np.mean(np.linalg.norm(proj - image_points, axis=1))
+                if err < best_err:
+                    best_err = err
+                    best_R = R_candidate
+                    best_rvec = rvec_candidate.flatten()
+                    # 可选：保存最佳 P 用于后续调试
+
+        if best_R is None:
+            return None
+
+        # 后续处理（四元数、置信度等）
+        q = self._rot_to_quat(best_R)
+        dist = np.linalg.norm(best_tvec)
+        conf = detection.confidence * max(0, 1 - best_err / 10)
+
+        # 更新上一帧（可选项，但不再需要，因为每帧独立）
+        # self.prev_rvec = best_rvec
+        # self.prev_tvec = best_tvec
+
+        return GatePose(
+            position=best_tvec,
+            orientation=q,
+            rotation_matrix=best_R,
+            rvec=best_rvec,
+            tvec=best_tvec,
+            confidence=conf,
+            reprojection_error=best_err,
+            distance=float(dist)
+        )
 
     def _rot_to_quat(self, R):
         trace = np.trace(R)

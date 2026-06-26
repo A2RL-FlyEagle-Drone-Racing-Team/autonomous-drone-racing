@@ -176,14 +176,11 @@ class PoseEstimator:
             dtype=np.float64,
         )
 
-        self.R_adj = np.array(
-            [
-                [0, -1, 0],
-                [0, 0, -1],
-                [1, 0, 0],
-            ],
-            dtype=np.float64,
-        )  # 将新法线 x 转到旧法线 z
+        self.R_adj = np.array([
+            [0, -1,  0],
+            [0,  0, -1],
+            [1,  0,  0]
+        ], dtype=np.float64)
         # 保存上一帧的 rvec 和 tvec（初始为 None）
         self.prev_rvec: Optional[np.ndarray] = None
         self.prev_tvec: Optional[np.ndarray] = None
@@ -200,6 +197,7 @@ class PoseEstimator:
                 # 使用上一帧结果作为初始值
                 rvec_init = self.prev_rvec.copy()
                 tvec_init = self.prev_tvec.copy()
+                use_init = True
             else:
                 # 第一帧：先用 IPPE 快速求解作为初始值
                 success, rvec_init, tvec_init = cv2.solvePnP(
@@ -208,6 +206,7 @@ class PoseEstimator:
                 if not success:
                     rvec_init = np.zeros((3, 1), dtype=np.float64)
                     tvec_init = np.zeros((3, 1), dtype=np.float64)
+                use_init = True
 
             # 使用迭代法（可指定初始值）
             success, rvec, tvec = cv2.solvePnP(
@@ -217,37 +216,60 @@ class PoseEstimator:
                 self.dist_coeffs,
                 rvec=rvec_init,
                 tvec=tvec_init,
-                useExtrinsicGuess=True,  # 启用初始值
+                useExtrinsicGuess=use_init,  # 启用初始值
                 flags=cv2.SOLVEPNP_ITERATIVE,
             )
             if not success:
                 # 若失败，回退到 IPPE（无初始值）
                 success, rvec, tvec = cv2.solvePnP(
-                    self.gate_points_3d, image_points, self.camera_matrix, self.dist_coeffs, flags=cv2.SOLVEPNP_IPPE
+                    self.gate_points_3d,
+                    image_points,
+                    self.camera_matrix,
+                    self.dist_coeffs,
+                    flags=cv2.SOLVEPNP_IPPE,
                 )
                 if not success:
                     return None
 
             R_ippe, _ = cv2.Rodrigues(rvec)
-            R_true = R_ippe @ self.R_adj
-            rvec_true, _ = cv2.Rodrigues(R_true)
-            # 替换 rvec 和 tvec，继续后续计算
-            rvec = rvec_true.flatten()
+            R_corrected = R_ippe @ self.R_adj
+            rvec_corrected, _ = cv2.Rodrigues(R_corrected)
             tvec = tvec.flatten()
-            R, _ = cv2.Rodrigues(rvec)
+
+            # ----- 生成 4 个旋转对称候选（绕门法线 Z 轴） -----
+            candidates = []
+            for angle_deg in [0, 90, 180, 270]:
+                angle_rad = np.deg2rad(angle_deg)
+                Rz = cv2.Rodrigues(np.array([0, 0, angle_rad]))[0]
+                R_candidate = R_corrected @ Rz
+                rvec_candidate, _ = cv2.Rodrigues(R_candidate)
+                # 计算重投影误差
+                proj, _ = cv2.projectPoints(
+                    self.gate_points_3d,
+                    rvec_candidate,
+                    tvec,
+                    self.camera_matrix,
+                    self.dist_coeffs
+                )
+                proj = proj.reshape(-1, 2)
+                reproj_err = np.mean(np.linalg.norm(proj - image_points, axis=1))
+                candidates.append((rvec_candidate.flatten(), tvec.copy(), reproj_err))
+
+            # 选择重投影误差最小的候选
+            best_rvec, best_tvec, best_err = min(candidates, key=lambda x: x[2])
+
+            # 替换 rvec 和 tvec，继续后续计算
+            R, _ = cv2.Rodrigues(best_rvec)
             q = self._rot_to_quat(R)
 
             # 更新上一帧结果
-            self.prev_rvec = rvec.copy()
-            self.prev_tvec = tvec.copy()
+            self.prev_rvec = best_rvec.copy()
+            self.prev_tvec = best_tvec.copy()
 
             # 重投影误差
-            proj, _ = cv2.projectPoints(self.gate_points_3d, rvec, tvec, self.camera_matrix, self.dist_coeffs)
-            proj = proj.reshape(-1, 2)
-            reproj_err = np.mean(np.linalg.norm(proj - image_points, axis=1))
-            dist = np.linalg.norm(tvec)
-            conf = detection.confidence * max(0, 1 - reproj_err / 10)
-            return GatePose(tvec, q, R, rvec, tvec, conf, reproj_err, float(dist))
+            dist = np.linalg.norm(best_tvec)
+            conf = detection.confidence * max(0, 1 - best_err / 10)
+            return GatePose(best_tvec, q, R, best_rvec, best_tvec, conf, best_err, float(dist))
         except cv2.error:
             return None
 
